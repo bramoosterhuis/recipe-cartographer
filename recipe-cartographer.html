@@ -1,0 +1,1141 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Bitbake Recipe Cartographer</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
+    <style>
+      /* ============================================================
+         THEME TOKENS
+         Three themes share one set of variable names so every rule
+         below can be theme-agnostic. `.theme-dark` is the default
+         (also bound to :root). `.theme-light` forces light.
+         `.theme-system` follows the OS via prefers-color-scheme.
+         The graph's data colours (role/layer/heat) are NOT themed:
+         they encode meaning and must read identically on any bg.
+         ============================================================ */
+      :root,
+      .theme-dark {
+        --bg: #0f1117;
+        --panel: #181b24;
+        --ink: #e6e8ee;
+        --mut: #8b91a3;
+        --line: #2a2f3d;
+        --fld: #0f1117;
+        --btn: #222736;
+        --btnh: #2c3346;
+        --bton: #3a4566;
+        --btonb: #5a6aa0;
+        --stroke: #0f1117;
+        --linkc: #3a4154;
+        --overlay: rgba(15, 17, 23, 0.96);
+        --accent: #ffd27f;
+      }
+      .theme-light {
+        --bg: #f4f5f8;
+        --panel: #ffffff;
+        --ink: #1c2030;
+        --mut: #5f6678;
+        --line: #dde1ea;
+        --fld: #f4f5f8;
+        --btn: #eceef4;
+        --btnh: #e0e4ee;
+        --bton: #cfd9f5;
+        --btonb: #7d92d8;
+        --stroke: #ffffff;
+        --linkc: #b6bccb;
+        --overlay: rgba(244, 245, 248, 0.96);
+        --accent: #c98a18;
+      }
+      @media (prefers-color-scheme: light) {
+        .theme-system {
+          --bg: #f4f5f8;
+          --panel: #ffffff;
+          --ink: #1c2030;
+          --mut: #5f6678;
+          --line: #dde1ea;
+          --fld: #f4f5f8;
+          --btn: #eceef4;
+          --btnh: #e0e4ee;
+          --bton: #cfd9f5;
+          --btonb: #7d92d8;
+          --stroke: #ffffff;
+          --linkc: #b6bccb;
+          --overlay: rgba(244, 245, 248, 0.96);
+          --accent: #c98a18;
+        }
+      }
+
+      /* ---- layout shell ---- */
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        font:
+          13px/1.4 -apple-system,
+          Segoe UI,
+          Helvetica,
+          Arial,
+          sans-serif;
+        background: var(--bg);
+        color: var(--ink);
+        overflow: hidden;
+      }
+      #wrap {
+        display: flex;
+        height: 100vh;
+      }
+      /* sidebar is a flex column so the theme bar can pin to the bottom */
+      #side {
+        width: 300px;
+        flex: 0 0 300px;
+        background: var(--panel);
+        border-right: 1px solid var(--line);
+        padding: 16px;
+        overflow: auto;
+        display: flex;
+        flex-direction: column;
+      }
+
+      /* ---- sidebar typography & controls ---- */
+      h1 {
+        font-size: 14px;
+        margin: 0 0 2px;
+      }
+      .sub {
+        color: var(--mut);
+        font-size: 11px;
+        margin-bottom: 12px;
+      }
+      .grp {
+        margin-bottom: 14px;
+        border-top: 1px solid var(--line);
+        padding-top: 10px;
+      }
+      .grp b {
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        color: var(--mut);
+      }
+      label.row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 3px 0;
+        cursor: pointer;
+        font-size: 12px;
+      }
+      input[type="search"],
+      input[type="text"] {
+        width: 100%;
+        padding: 7px 9px;
+        background: var(--fld);
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        color: var(--ink);
+        margin-bottom: 6px;
+      }
+      button {
+        background: var(--btn);
+        color: var(--ink);
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 5px 8px;
+        cursor: pointer;
+        font-size: 12px;
+        margin: 2px 3px 2px 0;
+      }
+      button.on {
+        background: var(--bton);
+        border-color: var(--btonb);
+      }
+      button:hover {
+        background: var(--btnh);
+      }
+      button:disabled {
+        opacity: 0.4;
+        cursor: default;
+      }
+
+      /* theme bar: pinned to bottom via margin-top:auto; icon-only buttons */
+      #themebar {
+        margin-top: auto;
+        border-top: 1px solid var(--line);
+        padding-top: 12px;
+        margin-bottom: 0;
+      }
+      button.ico {
+        padding: 7px 9px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--mut);
+      }
+      button.ico.on {
+        color: var(--ink);
+      }
+      button.ico:hover {
+        color: var(--ink);
+      }
+
+      /* ---- legend & misc text ---- */
+      .stat {
+        font-size: 11px;
+        color: var(--mut);
+      }
+      #lg {
+        font-size: 11px;
+      }
+      .lgrow {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        padding: 2px 0;
+        color: var(--mut);
+      }
+      .dot {
+        width: 11px;
+        height: 11px;
+        border-radius: 50%;
+        display: inline-block;
+        flex: 0 0 11px;
+      }
+
+      /* ---- graph canvas ---- */
+      #graph {
+        flex: 1;
+        position: relative;
+      }
+      svg {
+        width: 100%;
+        height: 100%;
+        display: block;
+      }
+      .node circle {
+        stroke: var(--stroke);
+        stroke-width: 1px;
+        cursor: pointer;
+      }
+      .node text {
+        font-size: 9px;
+        fill: var(--mut);
+        pointer-events: none;
+      }
+      .link {
+        stroke: var(--linkc);
+        stroke-opacity: 0.3;
+      }
+      /* dimming applied when a node is selected (isolate its path) */
+      .node.dim {
+        opacity: 0.07;
+      }
+      .link.dim {
+        stroke-opacity: 0.03;
+      }
+      .node.hot text {
+        fill: var(--ink);
+        font-weight: 700;
+      }
+      .link.path {
+        stroke: var(--accent);
+        stroke-opacity: 0.9;
+        stroke-width: 2px;
+      }
+      .colhead {
+        fill: var(--mut);
+        font-size: 11px;
+        font-weight: 600;
+      }
+
+      /* node detail popover (bottom-left of canvas) */
+      #info {
+        position: absolute;
+        left: 12px;
+        bottom: 12px;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 10px 12px;
+        max-width: 360px;
+        display: none;
+      }
+      #info b {
+        color: #c98a18;
+      }
+      kbd,
+      code {
+        background: var(--btn);
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        padding: 0 5px;
+        font-size: 11px;
+        color: var(--ink);
+      }
+
+      /* ---- drop / busy overlays ---- */
+      #drop {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-direction: column;
+        gap: 10px;
+        background: var(--overlay);
+        z-index: 5;
+        text-align: center;
+        padding: 40px;
+      }
+      #drop.hide {
+        display: none;
+      }
+      #drop .big {
+        font-size: 18px;
+        font-weight: 600;
+      }
+      #drop.hot {
+        background: var(--bton);
+        outline: 2px dashed var(--btonb);
+        outline-offset: -20px;
+      }
+      #busy {
+        position: absolute;
+        inset: 0;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: var(--overlay);
+        z-index: 6;
+        font-size: 15px;
+      }
+    </style>
+  </head>
+
+  <body class="theme-system">
+    <div id="wrap">
+      <div id="side">
+        <h1>Bitbake Recipe Cartographer</h1>
+        <div class="sub">
+          drag a <code>task-depends.dot</code> onto the canvas. Everything is
+          parsed in your browser; nothing is uploaded.
+        </div>
+
+        <!-- root recipe: re-roots the already-loaded graph without re-dropping -->
+        <div class="grp">
+          <b>root recipe</b>
+          <div style="display: flex; gap: 6px; margin-top: 6px">
+            <input
+              type="text"
+              id="root"
+              value=""
+              placeholder="recipe to root the graph on"
+              style="margin-bottom: 0; flex: 1"
+            />
+            <button id="apply" class="ico" title="apply root (Enter)">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+            </button>
+          </div>
+          <div class="stat" id="loaded" style="margin-top: 6px">
+            no file loaded
+          </div>
+        </div>
+
+        <input id="q" type="search" placeholder="search recipe..." />
+
+        <div class="grp">
+          <b>layout</b><br />
+          <button id="lForce" class="on">force</button>
+          <button id="lDist">by distance</button>
+          <button id="lLayer">by layer</button>
+        </div>
+
+        <div class="grp">
+          <b>colour</b><br />
+          <button id="cKind" class="on">role</button>
+          <button id="cLayer">layer/team</button>
+          <button id="cHeat">in-degree heat</button>
+        </div>
+
+        <!-- images & packagegroups default OFF to declutter the sink nodes -->
+        <div class="grp">
+          <b>filter</b>
+          <label class="row"
+            ><input type="checkbox" id="fInd" checked /> indirect (role)</label
+          >
+          <label class="row"><input type="checkbox" id="fImg" /> images</label>
+          <label class="row"
+            ><input type="checkbox" id="fPkg" /> packagegroups</label
+          >
+          <label class="row"
+            ><input type="checkbox" id="fLeaf" /> leaves only (safe first
+            ports)</label
+          >
+        </div>
+
+        <div class="grp">
+          <button id="bReset">reset</button>
+          <div class="stat" id="counts"></div>
+        </div>
+
+        <div class="grp" id="lg">
+          <b>legend</b>
+          <div id="lgbody"></div>
+        </div>
+
+        <div class="grp stat">
+          click a node: highlight its
+          <b style="color: var(--accent)">path(s) to root</b>.
+          <kbd>scroll</kbd> zoom, drag pan.
+        </div>
+
+        <!-- theme switcher pinned to sidebar bottom; system / light / dark -->
+        <div class="grp" id="themebar">
+          <b>theme</b>
+          <div style="margin-top: 6px; display: flex; gap: 6px">
+            <button class="ico on" id="tSystem" title="follow system">
+              <svg
+                viewBox="0 0 24 24"
+                width="15"
+                height="15"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <rect x="2" y="3" width="20" height="14" rx="2" />
+                <path d="M8 21h8M12 17v4" />
+              </svg>
+            </button>
+            <button class="ico" id="tLight" title="light">
+              <svg
+                viewBox="0 0 24 24"
+                width="15"
+                height="15"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <circle cx="12" cy="12" r="4" />
+                <path
+                  d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"
+                />
+              </svg>
+            </button>
+            <button class="ico" id="tDark" title="dark">
+              <svg
+                viewBox="0 0 24 24"
+                width="15"
+                height="15"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" />
+              </svg>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div id="graph">
+        <!-- drop screen, shown until a file parses; includes generation help -->
+        <div id="drop">
+          <div class="big">Drop task-depends.dot here</div>
+          <div class="stat">
+            or click to choose a file &middot; ~5MB parses in a second or two
+          </div>
+          <div
+            style="
+              margin-top: 18px;
+              max-width: 520px;
+              text-align: left;
+              background: var(--panel);
+              border: 1px solid var(--line);
+              border-radius: 8px;
+              padding: 14px 16px;
+            "
+          >
+            <div
+              style="
+                font-size: 11px;
+                text-transform: uppercase;
+                letter-spacing: 0.5px;
+                color: var(--mut);
+                margin-bottom: 8px;
+              "
+            >
+              how to generate the file
+            </div>
+            <div style="font-size: 12px; color: var(--ink); line-height: 1.6">
+              Run in your bitbake build dir (where you'd normally build):<br />
+              <code
+                style="
+                  display: block;
+                  background: var(--fld);
+                  border: 1px solid var(--line);
+                  border-radius: 6px;
+                  padding: 8px 10px;
+                  margin: 8px 0;
+                  color: var(--ink);
+                  font-size: 12px;
+                "
+                >bitbake -g &lt;image-or-recipe&gt;</code
+              >
+              That writes <b>task-depends.dot</b>, <b>pn-buildlist</b>, and
+              <b>recipe-depends.dot</b> to the current dir. Drop the
+              <b>task-depends.dot</b> here.<br /><br />
+              <span style="color: var(--mut)">Examples:</span><br />
+              <code style="color: var(--mut); font-size: 11px"
+                >bitbake -g &lt;your-image&gt;</code
+              >
+              &mdash; whole image graph<br />
+              <code style="color: var(--mut); font-size: 11px"
+                >bitbake -g &lt;recipe&gt;</code
+              >
+              &mdash; one recipe's build closure<br /><br />
+              <span style="color: var(--mut)">Notes:</span> this view shows
+              <b>build-time</b> (DEPENDS) edges, the porting-relevant graph, not
+              runtime RDEPENDS. Set the <b>root recipe</b> on the left to
+              whatever recipe you want at the
+              centre of the graph; it re-roots the
+              same file without re-dropping. Layer/team colours are read from
+              each recipe's <code style="font-size: 11px">.bb</code> path in the
+              labels.
+            </div>
+          </div>
+          <input type="file" id="file" accept=".dot" style="display: none" />
+        </div>
+        <div id="busy">parsing&hellip;</div>
+        <div id="info"></div>
+      </div>
+    </div>
+
+    <script>
+      // ===========================================================
+      //  Bitbake Recipe Cartographer
+      //  A single-file, client-side viewer for `bitbake -g` output.
+      //  Pipeline:  raw .dot text  ->  parseDot()  ->  {nodes,links}
+      //             ->  build() (filter/shape)  ->  render() (d3).
+      //  No data leaves the browser; d3 is the only external dep.
+      // ===========================================================
+
+      // Fixed colour for each node ROLE. These are data colours, not
+      // theme chrome, so they stay constant across light/dark.
+      const ROLE = {
+        root: "#ffd27f", // the recipe we rooted on
+        direct: "#5aa9ff", // build-depends straight on root
+        indirect: "#52c971", // reaches root only via another consumer
+        image: "#9aa0b0", // an image recipe (sink)
+        pkggroup: "#c0934f", // a packagegroup (sink)
+      };
+
+      // ---- live state ----
+      let DATA = null; // parsed {nodes,links,root}
+      let LAYERS = []; // distinct owning layers, for the layer palette
+      let layerColor; // d3 ordinal scale layer -> colour
+      let maxIn = 1; // max in-degree, for the heat scale
+      let heat; // d3 sequential scale for in-degree heat
+      let colorMode = "role"; // role | layer | heat
+      let layoutMode = "force"; // force | dist | layer
+      let ROOT = ""; // current root recipe (set via the input)
+
+      // -----------------------------------------------------------
+      //  PARSE: turn the raw .dot text into a classified graph.
+      //  task-depends.dot is a task-level graph ("pkg.do_task").
+      //  We collapse to recipe level, keep only recipes that can
+      //  reach ROOT, and tag each with role / layer / distance /
+      //  in-degree so the views can filter and colour without
+      //  re-walking the graph.
+      // -----------------------------------------------------------
+      function parseDot(text, root) {
+        // edge line:  "A.do_x" -> "B.do_y"   (A build-depends on B)
+        const edgeRe =
+          /"([^"]+)\.do_[a-z_0-9]+"\s*->\s*"([^"]+)\.do_[a-z_0-9]+"/;
+        // label line carries the recipe's .bb path, used for layer & image detection
+        const labRe =
+          /"([^"]+)\.do_[a-z_0-9]+"\s*\[label="[^"]*?(\/[^"]+?\.bb)"/;
+
+        const rev = new Map(); // rev[B] = set of A that depend on B
+        const fwd = new Map(); // fwd[A] = set of B that A depends on
+        const bb = new Map(); // recipe -> .bb path
+        const add = (m, k, v) =>
+          (m.get(k) || m.set(k, new Set()).get(k)).add(v);
+
+        for (const line of text.split("\n")) {
+          const e = edgeRe.exec(line);
+          if (e) {
+            const a = e[1],
+              b = e[2];
+            if (a !== b) {
+              add(fwd, a, b);
+              add(rev, b, a);
+            }
+          }
+          const l = labRe.exec(line);
+          if (l && !bb.has(l[1])) bb.set(l[1], l[2]);
+        }
+
+        // Reverse reachability from root: everything that can reach it.
+        const seen = new Set([root]);
+        let fr = [root];
+        while (fr.length) {
+          const nx = [];
+          for (const n of fr)
+            for (const p of rev.get(n) || [])
+              if (!seen.has(p)) {
+                seen.add(p);
+                nx.push(p);
+              }
+          fr = nx;
+        }
+        const consumers = seen;
+        if (consumers.size <= 1) return null; // root not found / no consumers
+
+        // Min hop-distance from root (reverse BFS) -> column index for "by distance".
+        const dist = new Map([[root, 0]]);
+        const q = [root];
+        let qi = 0;
+        while (qi < q.length) {
+          const n = q[qi++];
+          for (const p of rev.get(n) || [])
+            if (consumers.has(p) && !dist.has(p)) {
+              dist.set(p, dist.get(n) + 1);
+              q.push(p);
+            }
+        }
+
+        // Classifiers.
+        //  - packagegroup: by name prefix (strong convention).
+        //  - image: by .bb living under an images/ dir (avoids false
+        //    positives on real recipes that merely end in "-image").
+        const direct = rev.get(root) || new Set();
+        const isPkg = (n) => /^packagegroup-/.test(n);
+        const isImg = (n) => {
+          const p = bb.get(n) || "";
+          return /\/images\//.test(p);
+        };
+        const isPseudo = (n) => isPkg(n) || isImg(n);
+
+        // Owning layer from the .bb path (meta-* segment).
+        const layerOf = (n) => {
+          const p = bb.get(n) || "";
+          const m = /\/(meta-[a-z0-9-]+)\//.exec(p);
+          if (m) return m[1];
+          if (isPseudo(n)) return "image";
+          return "unknown";
+        };
+
+        // In-degree (how many real consumers depend on a node) and the
+        // edge set, both restricted to the reachable subgraph. Pseudo
+        // nodes are excluded from in-degree so leaves surface correctly.
+        const indeg = new Map();
+        const edges = new Set();
+        for (const [b, ps] of rev) {
+          if (!consumers.has(b)) continue;
+          for (const a of ps)
+            if (consumers.has(a)) {
+              edges.add(a + "\u0001" + b);
+              if (!isPseudo(a)) indeg.set(b, (indeg.get(b) || 0) + 1);
+            }
+        }
+
+        const kind = (n) =>
+          n === root
+            ? "root"
+            : isPkg(n)
+              ? "pkggroup"
+              : isImg(n)
+                ? "image"
+                : direct.has(n)
+                  ? "direct"
+                  : "indirect";
+
+        const nodes = [...consumers].sort().map((n) => ({
+          id: n,
+          kind: kind(n),
+          layer: layerOf(n),
+          dist: dist.has(n) ? dist.get(n) : 99,
+          leaf: (indeg.get(n) || 0) === 0 && n !== root,
+          deg_in: indeg.get(n) || 0,
+        }));
+        const links = [...edges].sort().map((x) => {
+          const [a, b] = x.split("\u0001");
+          return { source: a, target: b };
+        });
+        return { nodes, links, root };
+      }
+
+      // Parse the dropped text and rebuild all derived scales, then render.
+      function ingest(text) {
+        window._RAWTEXT = text; // kept so "apply root" can re-parse the same file
+        if (!ROOT) {
+          document.getElementById("loaded").textContent =
+            "enter a root recipe above, then press \u21B5";
+          return;
+        }
+        document.getElementById("busy").style.display = "flex";
+        // defer so the "parsing..." overlay paints before the (blocking) parse
+        setTimeout(() => {
+          const d = parseDot(text, ROOT);
+          document.getElementById("busy").style.display = "none";
+          if (!d) {
+            document.getElementById("loaded").textContent =
+              'root "' + ROOT + '" not found in graph';
+            return;
+          }
+          DATA = d;
+          LAYERS = [...new Set(DATA.nodes.map((n) => n.layer))].sort();
+          layerColor = d3
+            .scaleOrdinal()
+            .domain(LAYERS)
+            .range(d3.schemeTableau10.concat(["#bbb", "#888", "#666"]));
+          maxIn = d3.max(DATA.nodes, (n) => n.deg_in) || 1;
+          heat = d3
+            .scaleSequential(d3.interpolateInferno)
+            .domain([0, Math.sqrt(maxIn)]);
+          document.getElementById("loaded").textContent =
+            DATA.nodes.length + " consumers of " + ROOT;
+          document.getElementById("drop").classList.add("hide");
+          render();
+        }, 30);
+      }
+
+      // -----------------------------------------------------------
+      //  FILE INPUT: drag-drop or click-to-pick, both read locally.
+      // -----------------------------------------------------------
+      const drop = document.getElementById("drop");
+      const fileIn = document.getElementById("file");
+      drop.onclick = () => fileIn.click();
+      fileIn.onchange = (e) => {
+        const f = e.target.files[0];
+        if (f) f.text().then(ingest);
+      };
+      ["dragenter", "dragover"].forEach((ev) =>
+        document.getElementById("graph").addEventListener(ev, (e) => {
+          e.preventDefault();
+          drop.classList.remove("hide");
+          drop.classList.add("hot");
+        }),
+      );
+      ["dragleave", "drop"].forEach((ev) =>
+        document.getElementById("graph").addEventListener(ev, (e) => {
+          e.preventDefault();
+          drop.classList.remove("hot");
+        }),
+      );
+      document.getElementById("graph").addEventListener("drop", (e) => {
+        const f = e.dataTransfer.files[0];
+        if (f) f.text().then(ingest);
+      });
+      // re-root the loaded graph on the recipe in the input
+      function applyRoot() {
+        ROOT = document.getElementById("root").value.trim();
+        if (window._RAWTEXT) ingest(window._RAWTEXT);
+      }
+      document.getElementById("apply").onclick = applyRoot;
+      // Enter in the root field applies too
+      document.getElementById("root").addEventListener("keydown", (e) => {
+        if (e.key === "Enter") applyRoot();
+      });
+
+      // -----------------------------------------------------------
+      //  COLOUR: pick a node's fill for the current colour mode.
+      // -----------------------------------------------------------
+      function nodeColor(d) {
+        if (colorMode === "role") return ROLE[d.kind];
+        if (colorMode === "layer") return layerColor(d.layer);
+        // heat: root fixed, others shaded by sqrt(in-degree)
+        return d.kind === "root" ? "#ffd27f" : heat(Math.sqrt(d.deg_in));
+      }
+
+      // ---- d3 scaffolding ----
+      const svg = d3.select("#graph").append("svg");
+      const g = svg.append("g");
+      const headG = g.append("g"); // column headers (distance/layer layouts)
+      const linkG = g.append("g");
+      const nodeG = g.append("g");
+      let W = innerWidth - 300,
+        H = innerHeight;
+      svg.attr("viewBox", [0, 0, W, H]);
+      const zoom = d3
+        .zoom()
+        .scaleExtent([0.1, 4])
+        .on("zoom", (e) => g.attr("transform", e.transform));
+      svg.call(zoom);
+
+      // -----------------------------------------------------------
+      //  BUILD: apply the filter checkboxes to DATA, returning the
+      //  node/link subset to actually draw.
+      // -----------------------------------------------------------
+      function build() {
+        let nodes = DATA.nodes.map((d) => Object.assign({}, d));
+        let links = DATA.links.map((d) => ({
+          source: d.source,
+          target: d.target,
+        }));
+        const sI = fInd.checked,
+          sImg = fImg.checked,
+          sPkg = fPkg.checked,
+          lo = fLeaf.checked;
+        const keep = (n) => {
+          if (n.kind === "root") return true;
+          if (!sI && n.kind === "indirect") return false;
+          if (!sImg && n.kind === "image") return false;
+          if (!sPkg && n.kind === "pkggroup") return false;
+          if (lo && !n.leaf && n.kind !== "root") return false;
+          return true;
+        };
+        const ids = new Set(nodes.filter(keep).map((n) => n.id));
+        nodes = nodes.filter((n) => ids.has(n.id));
+        links = links.filter((l) => ids.has(l.source) && ids.has(l.target));
+        counts.textContent =
+          nodes.length + " nodes, " + links.length + " edges";
+        return { nodes, links };
+      }
+
+      // ---- render state shared across layouts ----
+      let sim, nodeSel, linkSel, adj;
+
+      // -----------------------------------------------------------
+      //  RENDER: (re)draw nodes & links, then hand off to the
+      //  active layout. Called on every filter/colour/layout change.
+      // -----------------------------------------------------------
+      function render() {
+        if (!DATA) return;
+        const { nodes, links } = build();
+
+        // adjacency (undirected) for quick neighbour lookups
+        adj = new Map(nodes.map((n) => [n.id, new Set()]));
+        links.forEach((l) => {
+          adj.get(l.source).add(l.target);
+          adj.get(l.target).add(l.source);
+        });
+
+        headG.selectAll("*").remove();
+        linkG.selectAll("*").remove();
+        nodeG.selectAll("*").remove();
+
+        linkSel = linkG
+          .selectAll("line")
+          .data(links)
+          .join("line")
+          .attr("class", "link");
+
+        nodeSel = nodeG
+          .selectAll("g")
+          .data(nodes, (d) => d.id)
+          .join("g")
+          .attr("class", "node")
+          .call(d3.drag().on("start", ds).on("drag", dd).on("end", de))
+          .on("click", onClick);
+
+        nodeSel
+          .append("circle")
+          .attr("r", (d) =>
+            d.kind === "root" ? 11 : Math.max(4, 3 + Math.sqrt(d.deg_in)),
+          )
+          .attr("fill", nodeColor);
+        nodeSel
+          .append("text")
+          .attr("x", 8)
+          .attr("y", 3)
+          .text((d) => d.id);
+
+        if (sim) sim.stop();
+        if (layoutMode === "force") forceLayout(nodes, links);
+        else columnLayout(nodes, layoutMode);
+        drawLegend();
+      }
+
+      // Force-directed: the default "explore" view.
+      function forceLayout(nodes, links) {
+        sim = d3
+          .forceSimulation(nodes)
+          .force(
+            "link",
+            d3
+              .forceLink(links)
+              .id((d) => d.id)
+              .distance(50)
+              .strength(0.25),
+          )
+          .force("charge", d3.forceManyBody().strength(-140))
+          .force("center", d3.forceCenter(W / 2, H / 2))
+          .force("collide", d3.forceCollide(13))
+          .on("tick", tick);
+      }
+
+      // Column layout: group into columns by distance-from-root or by
+      // owning layer; within a column, sort by in-degree (hubs on top).
+      // Used by both "by distance" and "by layer".
+      function columnLayout(nodes, mode) {
+        const key = mode === "dist" ? "dist" : "layer";
+        const groups =
+          key === "dist"
+            ? [...new Set(nodes.map((n) => n.dist))].sort((a, b) => a - b)
+            : [...new Set(nodes.map((n) => n.layer))].sort();
+        const gx = d3
+          .scalePoint()
+          .domain(groups)
+          .range([90, W - 60])
+          .padding(0.5);
+
+        const byG = {};
+        nodes.forEach((n) => {
+          const k = n[key];
+          (byG[k] = byG[k] || []).push(n);
+        });
+        Object.values(byG).forEach((arr) => {
+          arr.sort((a, b) => b.deg_in - a.deg_in);
+          const gy = d3
+            .scalePoint()
+            .domain(arr.map((n) => n.id))
+            .range([60, H - 40])
+            .padding(0.5);
+          arr.forEach((n) => {
+            n.tx = gx(n[key]);
+            n.ty = gy(n.id);
+          });
+        });
+
+        headG
+          .selectAll("text")
+          .data(groups)
+          .join("text")
+          .attr("class", "colhead")
+          .attr("x", (d) => gx(d))
+          .attr("y", 24)
+          .attr("text-anchor", "middle")
+          .text((d) =>
+            key === "dist"
+              ? d === 0
+                ? ROOT
+                : d + " hop" + (d > 1 ? "s" : "")
+              : d,
+          );
+
+        // gentle forces pin nodes to their target column/row
+        sim = d3
+          .forceSimulation(nodes)
+          .force("x", d3.forceX((d) => d.tx).strength(0.9))
+          .force("y", d3.forceY((d) => d.ty).strength(0.9))
+          .force("collide", d3.forceCollide(7))
+          .on("tick", tick);
+      }
+
+      // Shared tick: sync DOM positions to the simulation.
+      function tick() {
+        linkSel
+          .attr("x1", (d) => d.source.x)
+          .attr("y1", (d) => d.source.y)
+          .attr("x2", (d) => d.target.x)
+          .attr("y2", (d) => d.target.y);
+        nodeSel.attr("transform", (d) => `translate(${d.x},${d.y})`);
+      }
+
+      // -----------------------------------------------------------
+      //  SELECTION: clicking a node walks the full forward path(s)
+      //  to root, highlighting that chain (the actual "flip path"),
+      //  and shows the node's direct deps in the popover.
+      // -----------------------------------------------------------
+      function pathToRoot(id) {
+        // forward adjacency from the full DATA (not the filtered view)
+        const par = new Map(DATA.nodes.map((n) => [n.id, []]));
+        DATA.links.forEach((l) => par.get(l.source).push(l.target));
+        const nodesOn = new Set(),
+          edgesOn = new Set(),
+          seen = new Set();
+        const stk = [id];
+        while (stk.length) {
+          const n = stk.pop();
+          if (seen.has(n)) continue;
+          seen.add(n);
+          nodesOn.add(n);
+          for (const t of par.get(n) || []) {
+            edgesOn.add(n + ">" + t);
+            if (!seen.has(t)) stk.push(t);
+          }
+        }
+        return { nodesOn, edgesOn };
+      }
+
+      function onClick(e, d) {
+        e.stopPropagation();
+        const { nodesOn, edgesOn } = pathToRoot(d.id);
+        nodeSel
+          .classed("dim", (n) => !nodesOn.has(n.id))
+          .classed("hot", (n) => n.id === d.id);
+        linkSel
+          .classed("dim", (l) => !edgesOn.has(l.source.id + ">" + l.target.id))
+          .classed("path", (l) => edgesOn.has(l.source.id + ">" + l.target.id));
+
+        const outs = DATA.links
+          .filter((l) => l.source === d.id)
+          .map((l) => l.target);
+        const ins = DATA.links
+          .filter((l) => l.target === d.id)
+          .map((l) => l.source);
+        const inf = document.getElementById("info");
+        inf.style.display = "block";
+        inf.innerHTML =
+          `<b>${d.id}</b> &middot; ${d.kind} &middot; ${d.layer} &middot; ${d.dist} hop(s)${d.leaf ? " &middot; leaf" : ""}<br>` +
+          `depends on (${outs.length}): ${outs.slice(0, 10).join(", ") || "&mdash;"}${outs.length > 10 ? "&hellip;" : ""}<br>` +
+          `depended on by (${ins.length}): ${ins.slice(0, 10).join(", ") || "&mdash;"}${ins.length > 10 ? "&hellip;" : ""}`;
+      }
+
+      // click empty canvas clears any selection
+      svg.on("click", () => {
+        if (!nodeSel) return;
+        nodeSel.classed("dim", false).classed("hot", false);
+        linkSel.classed("dim", false).classed("path", false);
+        info.style.display = "none";
+      });
+
+      // ---- drag handlers (force layout lets nodes settle again on release) ----
+      function ds(e, d) {
+        if (!e.active && sim) sim.alphaTarget(0.3).restart();
+        d.fx = d.x;
+        d.fy = d.y;
+      }
+      function dd(e, d) {
+        d.fx = e.x;
+        d.fy = e.y;
+      }
+      function de(e, d) {
+        if (!e.active && sim) sim.alphaTarget(0);
+        if (layoutMode === "force") {
+          d.fx = null;
+          d.fy = null;
+        }
+      }
+
+      // -----------------------------------------------------------
+      //  LEGEND: reflects the active colour mode.
+      // -----------------------------------------------------------
+      function drawLegend() {
+        const b = document.getElementById("lgbody");
+        b.innerHTML = "";
+        let items = [];
+        if (colorMode === "role") items = Object.entries(ROLE);
+        else if (colorMode === "layer")
+          items = LAYERS.map((l) => [l, layerColor(l)]);
+        else
+          items = [
+            ["leaf / cold", heat(0)],
+            ["few", heat(Math.sqrt(maxIn) / 2)],
+            ["hub / hot", heat(Math.sqrt(maxIn))],
+          ];
+        items.forEach(([k, c]) => {
+          const r = document.createElement("div");
+          r.className = "lgrow";
+          r.innerHTML = `<i class="dot" style="background:${c}"></i>${k}`;
+          b.appendChild(r);
+        });
+      }
+
+      // -----------------------------------------------------------
+      //  CONTROL WIRING
+      // -----------------------------------------------------------
+      // toggle the .on class across a button group
+      function setBtn(ids, on) {
+        ids.forEach((i) =>
+          document.getElementById(i).classList.toggle("on", i === on),
+        );
+      }
+
+      // layout buttons
+      lForce.onclick = () => {
+        layoutMode = "force";
+        setBtn(["lForce", "lDist", "lLayer"], "lForce");
+        render();
+      };
+      lDist.onclick = () => {
+        layoutMode = "dist";
+        setBtn(["lForce", "lDist", "lLayer"], "lDist");
+        render();
+      };
+      lLayer.onclick = () => {
+        layoutMode = "layer";
+        setBtn(["lForce", "lDist", "lLayer"], "lLayer");
+        render();
+      };
+
+      // colour buttons (recolour in place, no full re-layout)
+      cKind.onclick = () => {
+        colorMode = "role";
+        setBtn(["cKind", "cLayer", "cHeat"], "cKind");
+        if (nodeSel) nodeSel.select("circle").attr("fill", nodeColor);
+        drawLegend();
+      };
+      cLayer.onclick = () => {
+        colorMode = "layer";
+        setBtn(["cKind", "cLayer", "cHeat"], "cLayer");
+        if (nodeSel) nodeSel.select("circle").attr("fill", nodeColor);
+        drawLegend();
+      };
+      cHeat.onclick = () => {
+        colorMode = "heat";
+        setBtn(["cKind", "cLayer", "cHeat"], "cHeat");
+        if (nodeSel) nodeSel.select("circle").attr("fill", nodeColor);
+        drawLegend();
+      };
+
+      // filter checkboxes
+      ["fInd", "fImg", "fPkg", "fLeaf"].forEach(
+        (i) => (document.getElementById(i).onchange = render),
+      );
+
+      // reset to defaults (indirect on; images/packagegroups/leaves off)
+      bReset.onclick = () => {
+        fInd.checked = true;
+        fImg.checked = fPkg.checked = fLeaf.checked = false;
+        layoutMode = "force";
+        colorMode = "role";
+        setBtn(["lForce", "lDist", "lLayer"], "lForce");
+        setBtn(["cKind", "cLayer", "cHeat"], "cKind");
+        svg.transition().call(zoom.transform, d3.zoomIdentity);
+        render();
+      };
+
+      // search: highlight matches, dim the rest
+      q.oninput = () => {
+        if (!nodeSel) return;
+        const v = q.value.toLowerCase().trim();
+        if (!v) {
+          nodeSel.classed("dim", false).classed("hot", false);
+          return;
+        }
+        nodeSel
+          .classed("dim", (n) => !n.id.toLowerCase().includes(v))
+          .classed("hot", (n) => n.id.toLowerCase().includes(v));
+      };
+
+      // theme switcher (no persistence: resets to system each load)
+      function setTheme(t) {
+        document.body.className = "theme-" + t;
+        setBtn(
+          ["tSystem", "tLight", "tDark"],
+          { system: "tSystem", light: "tLight", dark: "tDark" }[t],
+        );
+      }
+      tSystem.onclick = () => setTheme("system");
+      tLight.onclick = () => setTheme("light");
+      tDark.onclick = () => setTheme("dark");
+
+      // keep the canvas sized to the window
+      addEventListener("resize", () => {
+        W = innerWidth - 300;
+        H = innerHeight;
+        svg.attr("viewBox", [0, 0, W, H]);
+        if (DATA) render();
+      });
+    </script>
+  </body>
+</html>
