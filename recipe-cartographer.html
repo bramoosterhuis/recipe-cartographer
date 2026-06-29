@@ -202,6 +202,24 @@
         display: inline-block;
         flex: 0 0 11px;
       }
+      .credit {
+        margin-top: 10px;
+        font-size: 10px;
+        color: var(--mut);
+        opacity: 0.7;
+        transition: opacity 0.2s;
+      }
+      .credit:hover {
+        opacity: 1;
+      }
+      .credit a {
+        color: var(--mut);
+        text-decoration: none;
+        border-bottom: 1px dotted var(--line);
+      }
+      .credit a:hover {
+        color: var(--ink);
+      }
 
       /* ---- graph canvas ---- */
       #graph {
@@ -443,6 +461,16 @@
                 <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" />
               </svg>
             </button>
+          </div>
+          <div class="credit">
+            made with
+            <span aria-label="love" title="love">&#10084;&#65039;</span> by
+            <a
+              href="https://github.com/bramoosterhuis"
+              target="_blank"
+              rel="noopener"
+              >Bram Oosterhuis</a
+            >
           </div>
         </div>
       </div>
