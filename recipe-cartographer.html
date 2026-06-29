@@ -777,6 +777,11 @@
       document.getElementById("root").addEventListener("keydown", (e) => {
         if (e.key === "Enter") applyRoot();
       });
+      // Picking a suggestion from the datalist fires an input event with
+      // inputType "insertReplacementText" — apply immediately, no extra Enter.
+      document.getElementById("root").addEventListener("input", (e) => {
+        if (e.inputType === "insertReplacementText") applyRoot();
+      });
 
       // -----------------------------------------------------------
       //  COLOUR: pick a node's fill for the current colour mode.
