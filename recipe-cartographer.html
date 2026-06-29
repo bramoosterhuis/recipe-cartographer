@@ -332,7 +332,10 @@
               value=""
               placeholder="recipe to root the graph on"
               style="margin-bottom: 0; flex: 1"
+              list="recipes"
+              autocomplete="off"
             />
+            <datalist id="recipes"></datalist>
             <button id="apply" class="ico" title="apply root (Enter)">
               <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
             </button>
@@ -673,11 +676,41 @@
       }
 
       // Parse the dropped text and rebuild all derived scales, then render.
+      // Harvest every recipe name in the dot (once per file) to drive the
+      // root field's native autocomplete — so typing always lands on a real
+      // recipe rather than a guess.
+      function fillRecipeList(text) {
+        const set = new Set();
+        for (const m of text.matchAll(/"([^"]+)\.do_[a-z_0-9]+"/g)) set.add(m[1]);
+        const dl = document.getElementById("recipes");
+        dl.innerHTML = "";
+        const frag = document.createDocumentFragment();
+        [...set].sort().forEach((n) => {
+          const o = document.createElement("option");
+          o.value = n;
+          frag.appendChild(o);
+        });
+        dl.appendChild(frag);
+      }
+
       function ingest(text) {
         window._RAWTEXT = text; // kept so "apply root" can re-parse the same file
+        // build the autocomplete list once per distinct file
+        if (window._RECIPES_FOR !== text) {
+          fillRecipeList(text);
+          window._RECIPES_FOR = text;
+        }
+        const dropEl = document.getElementById("drop");
         if (!ROOT) {
+          // file is loaded but no root chosen yet: keep the overlay up but
+          // turn it into a clear prompt, and focus the root input.
+          dropEl.classList.remove("hide");
+          dropEl.querySelector(".big").textContent = "File loaded \u2713";
+          dropEl.querySelector(".stat").textContent =
+            "now type a root recipe on the left and press \u21B5";
           document.getElementById("loaded").textContent =
-            "enter a root recipe above, then press \u21B5";
+            "file ready \u2014 enter a root recipe";
+          document.getElementById("root").focus();
           return;
         }
         document.getElementById("busy").style.display = "flex";
